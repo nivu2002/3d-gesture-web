@@ -1,0 +1,627 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Husky Gesture Viewer</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      background: #0f0f13;
+      font-family: sans-serif;
+      overflow: hidden;
+      height: 100vh;
+      width: 100vw;
+    }
+
+    #canvas-container {
+      position: absolute;
+      inset: 0;
+    }
+
+    #webcam {
+      position: absolute;
+      bottom: 20px;
+      right: 20px;
+      width: 200px;
+      height: 150px;
+      border-radius: 12px;
+      border: 2px solid rgba(255,255,255,0.15);
+      object-fit: cover;
+      transform: scaleX(-1);
+      z-index: 10;
+    }
+
+    #landmark-canvas {
+      position: absolute;
+      bottom: 20px;
+      right: 20px;
+      width: 200px;
+      height: 150px;
+      border-radius: 12px;
+      z-index: 11;
+      pointer-events: none;
+    }
+
+    #gesture-display {
+      position: absolute;
+      top: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(255,255,255,0.07);
+      backdrop-filter: blur(10px);
+      border: 1px solid rgba(255,255,255,0.12);
+      border-radius: 50px;
+      padding: 10px 24px;
+      color: #fff;
+      font-size: 15px;
+      font-weight: 500;
+      z-index: 20;
+      letter-spacing: 0.3px;
+      transition: all 0.3s ease;
+    }
+
+    #gesture-display .emoji { margin-right: 8px; font-size: 18px; }
+
+    #guide {
+      position: absolute;
+      top: 80px;
+      left: 20px;
+      background: rgba(255,255,255,0.06);
+      backdrop-filter: blur(10px);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 16px;
+      padding: 16px 20px;
+      color: rgba(255,255,255,0.75);
+      font-size: 13px;
+      z-index: 20;
+      line-height: 2;
+    }
+
+    #guide .title {
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      color: rgba(255,255,255,0.4);
+      margin-bottom: 8px;
+    }
+
+    #guide .row { display: flex; align-items: center; gap: 10px; }
+    #guide .icon { font-size: 16px; width: 22px; text-align: center; }
+    #guide .dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: rgba(255,255,255,0.2);
+      flex-shrink: 0;
+      transition: background 0.3s;
+    }
+    #guide .dot.active { background: #6ee7b7; box-shadow: 0 0 6px #6ee7b7; }
+
+    #status {
+      position: absolute;
+      bottom: 20px;
+      left: 20px;
+      font-size: 12px;
+      color: rgba(255,255,255,0.35);
+      z-index: 20;
+    }
+
+    #status .indicator {
+      display: inline-block;
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: #f87171;
+      margin-right: 6px;
+      vertical-align: middle;
+      transition: background 0.4s;
+    }
+    #status .indicator.on { background: #6ee7b7; }
+
+    .anim-btn {
+      display: inline-block;
+      margin: 4px;
+      padding: 6px 14px;
+      background: rgba(255,255,255,0.08);
+      border: 1px solid rgba(255,255,255,0.15);
+      border-radius: 20px;
+      color: rgba(255,255,255,0.7);
+      font-size: 12px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .anim-btn:hover { background: rgba(255,255,255,0.15); color: #fff; }
+    .anim-btn.active { background: rgba(110,231,183,0.2); border-color: #6ee7b7; color: #6ee7b7; }
+
+    #anim-panel {
+      position: absolute;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 20;
+      text-align: center;
+      display: none;
+    }
+
+    #loading-screen {
+      position: fixed;
+      inset: 0;
+      background: #0f0f13;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      z-index: 100;
+      color: #fff;
+      gap: 16px;
+    }
+
+    .spinner {
+      width: 40px; height: 40px;
+      border: 3px solid rgba(255,255,255,0.1);
+      border-top-color: #6ee7b7;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    #loading-screen p { color: rgba(255,255,255,0.5); font-size: 14px; }
+  </style>
+</head>
+<body>
+
+<div id="loading-screen">
+  <div class="spinner"></div>
+  <h2 style="font-weight:500">Loading Husky...</h2>
+  <p id="load-status">Setting up Three.js</p>
+</div>
+
+<div id="canvas-container"></div>
+
+<video id="webcam" autoplay muted playsinline></video>
+<canvas id="landmark-canvas"></canvas>
+
+<div id="gesture-display">
+  <span class="emoji">✋</span>
+  <span id="gesture-text">Show your hand to begin</span>
+</div>
+
+<div id="guide">
+  <div class="title">Gesture Controls</div>
+  <div class="row"><span class="dot" id="dot-rotate"></span><span class="icon">👋</span> Wave — Rotate left / right</div>
+  <div class="row"><span class="dot" id="dot-zoom"></span><span class="icon">🤏</span> Pinch — Zoom in / out</div>
+  <div class="row"><span class="dot" id="dot-wave"></span><span class="icon">✋</span> Open palm — Happy animation</div>
+  <div class="row"><span class="dot" id="dot-fist"></span><span class="icon">✊</span> Fist — Reset position</div>
+  <div class="row"><span class="dot" id="dot-point"></span><span class="icon">☝️</span> Point up — Next animation</div>
+</div>
+
+<div id="anim-panel" id="anim-panel"></div>
+
+<div id="status">
+  <span class="indicator" id="cam-indicator"></span>
+  <span id="status-text">Starting camera...</span>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+// ─── THREE.JS SCENE SETUP ───────────────────────────────────────────────────
+const container = document.getElementById('canvas-container');
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+renderer.setPixelRatio(window.devicePixelRatio);
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+container.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0f0f13);
+scene.fog = new THREE.Fog(0x0f0f13, 8, 20);
+
+const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 100);
+camera.position.set(0, 1.2, 4.5);
+camera.lookAt(0, 0.5, 0);
+
+// Lighting
+const ambient = new THREE.AmbientLight(0xffffff, 0.5);
+scene.add(ambient);
+
+const dirLight = new THREE.DirectionalLight(0xfff4e0, 1.2);
+dirLight.position.set(3, 6, 4);
+dirLight.castShadow = true;
+scene.add(dirLight);
+
+const rimLight = new THREE.DirectionalLight(0x8ab4f8, 0.4);
+rimLight.position.set(-4, 3, -4);
+scene.add(rimLight);
+
+const fillLight = new THREE.PointLight(0x6ee7b7, 0.3, 12);
+fillLight.position.set(-2, 1, 2);
+scene.add(fillLight);
+
+// Floor
+const floorGeo = new THREE.CircleGeometry(3, 64);
+const floorMat = new THREE.MeshStandardMaterial({
+  color: 0x1a1a22, roughness: 0.9, metalness: 0.1
+});
+const floor = new THREE.Mesh(floorGeo, floorMat);
+floor.rotation.x = -Math.PI / 2;
+floor.receiveShadow = true;
+scene.add(floor);
+
+// Subtle grid
+const gridHelper = new THREE.GridHelper(6, 20, 0x2a2a35, 0x1e1e28);
+scene.add(gridHelper);
+
+// ─── MODEL LOADING ──────────────────────────────────────────────────────────
+let model = null;
+let mixer = null;
+let animations = [];
+let currentAnimIndex = 0;
+let currentAction = null;
+const clock = new THREE.Clock();
+
+// Dynamically load GLTFLoader
+const loaderScript = document.createElement('script');
+loaderScript.src = 'https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js';
+loaderScript.onload = () => loadModel();
+document.head.appendChild(loaderScript);
+
+function loadModel() {
+  document.getElementById('load-status').textContent = 'Loading husky.glb...';
+  const loader = new THREE.GLTFLoader();
+
+  loader.load(
+    'husky.glb',
+    (gltf) => {
+      model = gltf.scene;
+
+      // Center & scale
+      const box = new THREE.Box3().setFromObject(model);
+      const center = box.getCenter(new THREE.Vector3());
+      const size = box.getSize(new THREE.Vector3());
+      const maxDim = Math.max(size.x, size.y, size.z);
+      const scale = 1.8 / maxDim;
+
+      model.scale.setScalar(scale);
+      model.position.x -= center.x * scale;
+      model.position.y -= (box.min.y) * scale;
+      model.position.z -= center.z * scale;
+
+      model.traverse(child => {
+        if (child.isMesh) {
+          child.castShadow = true;
+          child.receiveShadow = true;
+        }
+      });
+
+      scene.add(model);
+
+      // Animations
+      if (gltf.animations && gltf.animations.length > 0) {
+        mixer = new THREE.AnimationMixer(model);
+        animations = gltf.animations;
+        playAnimation(0);
+        buildAnimPanel();
+      }
+
+      // Hide loading
+      document.getElementById('loading-screen').style.display = 'none';
+      startCamera();
+    },
+    (progress) => {
+      if (progress.total > 0) {
+        const pct = Math.round(progress.loaded / progress.total * 100);
+        document.getElementById('load-status').textContent = `Loading... ${pct}%`;
+      }
+    },
+    (err) => {
+      document.getElementById('load-status').textContent =
+        '⚠️ Could not find husky.glb — make sure the file is in the same folder as this HTML file.';
+      console.error(err);
+      setTimeout(() => {
+        document.getElementById('loading-screen').style.display = 'none';
+        startCamera();
+      }, 3000);
+    }
+  );
+}
+
+function playAnimation(index) {
+  if (!mixer || animations.length === 0) return;
+  if (currentAction) {
+    currentAction.fadeOut(0.4);
+  }
+  currentAnimIndex = index % animations.length;
+  const clip = animations[currentAnimIndex];
+  currentAction = mixer.clipAction(clip);
+  currentAction.reset().fadeIn(0.4).play();
+  updateAnimPanel();
+}
+
+function buildAnimPanel() {
+  const panel = document.getElementById('anim-panel');
+  panel.style.display = 'block';
+  animations.forEach((anim, i) => {
+    const btn = document.createElement('span');
+    btn.className = 'anim-btn';
+    btn.textContent = anim.name || `Anim ${i+1}`;
+    btn.onclick = () => playAnimation(i);
+    panel.appendChild(btn);
+  });
+}
+
+function updateAnimPanel() {
+  document.querySelectorAll('.anim-btn').forEach((btn, i) => {
+    btn.classList.toggle('active', i === currentAnimIndex);
+  });
+}
+
+// ─── GESTURE STATE ───────────────────────────────────────────────────────────
+let targetRotY = 0;
+let targetRotX = 0;
+let targetZoom = 4.5;
+let smoothRotY = 0;
+let smoothRotX = 0;
+let smoothZoom = 4.5;
+
+let prevPinchDist = null;
+let prevHandX = null;
+let gestureDebounce = {};
+
+function setGesture(name, emoji, dotId) {
+  document.getElementById('gesture-text').textContent = name;
+  document.querySelector('#gesture-display .emoji').textContent = emoji;
+
+  // Reset all dots
+  document.querySelectorAll('.dot').forEach(d => d.classList.remove('active'));
+  if (dotId) document.getElementById(dotId)?.classList.add('active');
+}
+
+function debounce(key, fn, delay = 800) {
+  const now = Date.now();
+  if (!gestureDebounce[key] || now - gestureDebounce[key] > delay) {
+    gestureDebounce[key] = now;
+    fn();
+  }
+}
+
+// ─── MEDIAPIPE LOADING ───────────────────────────────────────────────────────
+function startCamera() {
+  document.getElementById('status-text').textContent = 'Starting camera...';
+
+  // Load MediaPipe via CDN
+  const scripts = [
+    'https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js',
+    'https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js',
+    'https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js'
+  ];
+
+  let loaded = 0;
+  scripts.forEach(src => {
+    const s = document.createElement('script');
+    s.src = src;
+    s.onload = () => {
+      loaded++;
+      if (loaded === scripts.length) initMediaPipe();
+    };
+    s.onerror = () => {
+      document.getElementById('status-text').textContent = 'MediaPipe failed to load (check internet)';
+    };
+    document.head.appendChild(s);
+  });
+}
+
+function initMediaPipe() {
+  document.getElementById('status-text').textContent = 'Loading hand tracker...';
+
+  const videoEl = document.getElementById('webcam');
+  const lmCanvas = document.getElementById('landmark-canvas');
+  const lmCtx = lmCanvas.getContext('2d');
+
+  const hands = new Hands({
+    locateFile: (file) =>
+      `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+  });
+
+  hands.setOptions({
+    maxNumHands: 1,
+    modelComplexity: 1,
+    minDetectionConfidence: 0.7,
+    minTrackingConfidence: 0.6
+  });
+
+  hands.onResults((results) => {
+    // Draw landmarks
+    lmCanvas.width = 200;
+    lmCanvas.height = 150;
+    lmCtx.clearRect(0, 0, 200, 150);
+    lmCtx.save();
+    lmCtx.scale(-1, 1);
+    lmCtx.translate(-200, 0);
+
+    if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+      const landmarks = results.multiHandLandmarks[0];
+
+      drawConnectors(lmCtx, landmarks, HAND_CONNECTIONS, {
+        color: 'rgba(110,231,183,0.5)', lineWidth: 1.5
+      });
+      drawLandmarks(lmCtx, landmarks, {
+        color: '#6ee7b7', lineWidth: 1, radius: 2
+      });
+
+      processGesture(landmarks);
+      document.getElementById('cam-indicator').classList.add('on');
+      document.getElementById('status-text').textContent = 'Hand detected';
+    } else {
+      prevPinchDist = null;
+      prevHandX = null;
+      document.getElementById('cam-indicator').classList.remove('on');
+      document.getElementById('status-text').textContent = 'Camera active — show hand';
+      setGesture('Show your hand', '✋', null);
+    }
+    lmCtx.restore();
+  });
+
+  const camera = new Camera(videoEl, {
+    onFrame: async () => {
+      await hands.send({ image: videoEl });
+    },
+    width: 320,
+    height: 240
+  });
+
+  camera.start().then(() => {
+    document.getElementById('status-text').textContent = 'Camera active — show hand';
+  }).catch(err => {
+    document.getElementById('status-text').textContent = 'Camera access denied';
+    console.error(err);
+  });
+}
+
+// ─── GESTURE RECOGNITION ─────────────────────────────────────────────────────
+function getLandmark(lm, i) {
+  return { x: lm[i].x, y: lm[i].y, z: lm[i].z };
+}
+
+function dist2D(a, b) {
+  return Math.hypot(a.x - b.x, a.y - b.y);
+}
+
+function isFingerExtended(lm, tipIdx, pipIdx, mcpIdx) {
+  return lm[tipIdx].y < lm[pipIdx].y && lm[pipIdx].y < lm[mcpIdx].y;
+}
+
+function processGesture(lm) {
+  const thumb  = { tip: getLandmark(lm, 4),  base: getLandmark(lm, 2) };
+  const index  = { tip: getLandmark(lm, 8),  pip: getLandmark(lm, 7),  mcp: getLandmark(lm, 5) };
+  const middle = { tip: getLandmark(lm, 12), pip: getLandmark(lm, 11), mcp: getLandmark(lm, 9) };
+  const ring   = { tip: getLandmark(lm, 16), pip: getLandmark(lm, 15), mcp: getLandmark(lm, 13) };
+  const pinky  = { tip: getLandmark(lm, 20), pip: getLandmark(lm, 19), mcp: getLandmark(lm, 17) };
+  const wrist  = getLandmark(lm, 0);
+
+  const indexUp  = isFingerExtended(lm, 8,  7,  5);
+  const middleUp = isFingerExtended(lm, 12, 11, 9);
+  const ringUp   = isFingerExtended(lm, 16, 15, 13);
+  const pinkyUp  = isFingerExtended(lm, 20, 19, 17);
+
+  const extCount = [indexUp, middleUp, ringUp, pinkyUp].filter(Boolean).length;
+
+  const pinchDist = dist2D(thumb.tip, index.tip);
+  const handX = wrist.x;
+
+  // ── FIST (all fingers curled) → RESET
+  if (extCount === 0 && pinchDist > 0.08) {
+    setGesture('Fist — Reset!', '✊', 'dot-fist');
+    debounce('fist', () => {
+      targetRotY = 0;
+      targetRotX = 0;
+      targetZoom = 4.5;
+    }, 600);
+    prevHandX = null;
+    prevPinchDist = null;
+    return;
+  }
+
+  // ── PINCH (thumb + index close) → ZOOM
+  if (pinchDist < 0.06) {
+    setGesture('Pinch — Zoom', '🤏', 'dot-zoom');
+    if (prevPinchDist !== null) {
+      const delta = (prevPinchDist - pinchDist) * 10;
+      targetZoom = Math.max(2, Math.min(8, targetZoom + delta));
+    }
+    prevPinchDist = pinchDist;
+    prevHandX = null;
+    return;
+  }
+  prevPinchDist = null;
+
+  // ── POINT UP (only index extended) → NEXT ANIMATION
+  if (indexUp && !middleUp && !ringUp && !pinkyUp) {
+    setGesture('Pointing — Next Animation', '☝️', 'dot-point');
+    debounce('point', () => {
+      if (animations.length > 0) playAnimation(currentAnimIndex + 1);
+    }, 1000);
+    prevHandX = null;
+    return;
+  }
+
+  // ── OPEN PALM (all 4 fingers up) → HAPPY ANIMATION
+  if (extCount === 4) {
+    setGesture('Open Palm — Happy!', '✋', 'dot-wave');
+    debounce('palm', () => {
+      if (animations.length > 0) {
+        const happyIdx = animations.findIndex(a =>
+          a.name.toLowerCase().includes('happy') ||
+          a.name.toLowerCase().includes('idle') ||
+          a.name.toLowerCase().includes('jump')
+        );
+        playAnimation(happyIdx >= 0 ? happyIdx : 0);
+      }
+    }, 1200);
+
+    // Also allow horizontal rotation with open palm
+    if (prevHandX !== null) {
+      const dx = (prevHandX - handX) * 3;
+      targetRotY += dx;
+    }
+    prevHandX = handX;
+    return;
+  }
+
+  // ── WAVE / SWIPE (2-3 fingers) → ROTATE
+  if (extCount >= 2) {
+    setGesture('Wave — Rotating', '👋', 'dot-rotate');
+    if (prevHandX !== null) {
+      const dx = (prevHandX - handX) * 4;
+      targetRotY += dx;
+      // Vertical tilt with hand height
+      const dy = (wrist.y - 0.5) * 0.02;
+      targetRotX = Math.max(-0.5, Math.min(0.5, targetRotX + dy));
+    }
+    prevHandX = handX;
+    return;
+  }
+
+  prevHandX = handX;
+}
+
+// ─── ANIMATION LOOP ──────────────────────────────────────────────────────────
+const lerp = (a, b, t) => a + (b - a) * t;
+
+function animate() {
+  requestAnimationFrame(animate);
+
+  const delta = clock.getDelta();
+  if (mixer) mixer.update(delta);
+
+  // Smooth camera/model transitions
+  smoothRotY = lerp(smoothRotY, targetRotY, 0.08);
+  smoothRotX = lerp(smoothRotX, targetRotX, 0.08);
+  smoothZoom = lerp(smoothZoom, targetZoom, 0.06);
+
+  if (model) {
+    model.rotation.y = smoothRotY;
+    model.rotation.x = smoothRotX;
+  }
+
+  camera.position.z = smoothZoom;
+
+  // Idle breathing bob
+  const t = Date.now() * 0.001;
+  if (model) {
+    model.position.y = Math.sin(t * 1.2) * 0.015;
+  }
+
+  renderer.render(scene, camera);
+}
+
+animate();
+
+// ─── RESIZE ──────────────────────────────────────────────────────────────────
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+</script>
+</body>
+</html>
